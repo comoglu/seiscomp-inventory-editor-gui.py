@@ -30,6 +30,8 @@ git clone https://github.com/comoglu/seiscomp-inventory-editor-gui.py.git
 ```bash
 pip install PyQt5
 ```
+## Screenshot
+![Screenshot from 2024-12-21 21-52-42](https://github.com/user-attachments/assets/000d6477-cc09-48b2-9de1-0565ed83c199)
 
 ## Usage
 
