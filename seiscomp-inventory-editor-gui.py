@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QLabel, QPushButton, QFileDialog, QMessageBox, QLineEdit,
                            QFormLayout, QGroupBox, QTabWidget, QStyle, QStatusBar, 
                            QFrame, QSplitter, QMenu, QAction, QShortcut)
-from PyQt5.QtGui import QIcon, QPalette, QColor, QKeySequence  # Add QKeySequence here
+from PyQt5.QtGui import QIcon, QPalette, QColor, QKeySequence
 from PyQt5.QtCore import Qt, QSettings, QTimer
 from xml.etree import ElementTree as ET
 from pathlib import Path
@@ -112,35 +112,63 @@ class SeisCompInventoryEditor(QMainWindow):
         self.root = None
         self.settings = QSettings('SeisCompEditor', 'InventoryEditor')
         self.unsaved_changes = False
+        
+        # Initialize shortcuts before creating UI
+        self.shortcuts = {
+            'Ctrl+O': ('Open', self.load_xml),
+            'Ctrl+S': ('Save', self.save_xml),
+            'Ctrl+Q': ('Quit', self.close),
+            'F5': ('Expand All', lambda: self.tree_widget.expandAll() if hasattr(self, 'tree_widget') else None),
+            'F6': ('Collapse All', lambda: self.tree_widget.collapseAll() if hasattr(self, 'tree_widget') else None),
+            'Ctrl+F': ('Search', lambda: self.statusBar.showMessage('Search functionality coming soon...', 2000))
+        }
+        
         self.initUI()
         self.loadSettings()
         self.setupKeyboardNavigation()
 
-        # Initialize autosave timer
-        self.autosave_timer = QTimer()
-        self.autosave_timer.setSingleShot(True)
-        self.autosave_timer.timeout.connect(self.perform_autosave)
-
     def setupKeyboardNavigation(self):
         """Setup keyboard shortcuts and navigation"""
-        # Add keyboard shortcuts for common actions
-        shortcuts = {
-            'Ctrl+O': self.load_xml,
-            'Ctrl+S': self.save_xml,
-            'Ctrl+Q': self.close,
-            'F5': self.tree_widget.expandAll,
-            'F6': self.tree_widget.collapseAll,
-            'Ctrl+F': lambda: self.statusBar.showMessage('Search functionality coming soon...', 2000)
-        }
-        
-        for key, action in shortcuts.items():
-            # Use QKeySequence instead of QKeySequenceEdit
+        # Create global shortcuts
+        for key, (name, func) in self.shortcuts.items():
             shortcut = QShortcut(QKeySequence(key), self)
-            shortcut.activated.connect(action)
-        
-        # Enable tab navigation between form fields
-        for tab in [self.network_tab, self.station_tab, self.location_tab, self.sensor_tab, self.datalogger_tab, self.stream_tab]:
-            self.setupTabOrder(tab)
+            shortcut.activated.connect(func)
+
+    def show_shortcuts_help(self):
+        """Show a dialog with keyboard shortcuts reference"""
+        shortcuts_text = """
+Keyboard Shortcuts:
+------------------
+Navigation:
+↑/↓: Move between items
+←/→: Collapse/Expand items
+Enter: Select item
+Home: Go to first item
+End: Go to last item
+Tab: Move between fields
+
+Global:
+Ctrl+O: Open file
+Ctrl+S: Save file
+Ctrl+Q: Quit
+F5: Expand all
+F6: Collapse all
+F1: Show this help
+"""
+        # Create and show message box with shortcuts
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Keyboard Shortcuts")
+        msg.setText(shortcuts_text)
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: white;
+            }
+            QMessageBox QLabel {
+                font-family: monospace;
+                min-width: 500px;
+            }
+        """)
+        msg.exec_()
     
     def setupTabOrder(self, tab):
         """Setup tab order for form fields within a tab"""
@@ -786,31 +814,34 @@ class SeisCompInventoryEditor(QMainWindow):
         # File menu
         file_menu = menubar.addMenu('File')
         
-        open_action = QAction('Open', self)
-        open_action.setShortcut('Ctrl+O')
-        open_action.triggered.connect(self.load_xml)
-        file_menu.addAction(open_action)
-        
-        save_action = QAction('Save', self)
-        save_action.setShortcut('Ctrl+S')
-        save_action.triggered.connect(self.save_xml)
-        file_menu.addAction(save_action)
-        
-        file_menu.addSeparator()
-        
-        exit_action = QAction('Exit', self)
-        exit_action.setShortcut('Ctrl+Q')
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        # Create actions using the shortcuts dictionary
+        for shortcut_key, (action_name, func) in self.shortcuts.items():
+            if action_name in ['Open', 'Save', 'Quit']:
+                action = QAction(action_name, self)
+                # Don't set shortcuts here as they're handled globally
+                action.triggered.connect(func)
+                if action_name == 'Quit':
+                    file_menu.addSeparator()
+                    action.setText('Exit')  # Rename Quit to Exit in menu
+                file_menu.addAction(action)
         
         # Edit menu
         edit_menu = menubar.addMenu('Edit')
-
-        # Add Help menu with keyboard shortcuts reference
-        help_menu = self.menuBar().addMenu('Help')
+        
+        # Add expand/collapse actions to Edit menu
+        for shortcut_key, (action_name, func) in self.shortcuts.items():
+            if action_name in ['Expand All', 'Collapse All']:
+                action = QAction(action_name, self)
+                action.triggered.connect(func)
+                edit_menu.addAction(action)
+        
+        # Help menu
+        help_menu = menubar.addMenu('Help')
         shortcuts_action = QAction('Keyboard Shortcuts', self)
+        shortcuts_action.setShortcut('F1')  # Add F1 as standard help shortcut
         shortcuts_action.triggered.connect(self.show_shortcuts_help)
         help_menu.addAction(shortcuts_action)
+
 
         expand_all_action = QAction('Expand All', self)
         expand_all_action.triggered.connect(self.tree_widget.expandAll)
@@ -819,27 +850,6 @@ class SeisCompInventoryEditor(QMainWindow):
         collapse_all_action = QAction('Collapse All', self)
         collapse_all_action.triggered.connect(self.tree_widget.collapseAll)
         edit_menu.addAction(collapse_all_action)
-
-    def show_shortcuts_help(self):
-        """Show a dialog with keyboard shortcuts reference"""
-        shortcuts_text = """
-Keyboard Shortcuts:
-------------------
-Navigation:
-↑/↓: Move between items
-←/→: Collapse/Expand items
-Enter: Select item
-Home: Go to first item
-End: Go to last item
-Tab: Move between fields
-
-Global:
-Ctrl+O: Open file
-Ctrl+S: Save file
-Ctrl+Q: Quit
-F5: Expand all
-F6: Collapse all
-"""
 
     def loadSettings(self):
         geometry = self.settings.value('geometry')
