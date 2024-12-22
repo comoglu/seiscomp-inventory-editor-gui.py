@@ -1028,6 +1028,7 @@ F6: Collapse all
 
                     
     def populate_tree(self):
+        """Populate tree with sorted channels"""
         self.tree_widget.clear()
         inventory = self.root.find('sc3:Inventory', self.ns)
         if inventory is None:
@@ -1051,8 +1052,12 @@ F6: Collapse all
                     location_item.setText(0, f"Location: {location.get('code', '')}")
                     location_item.setData(0, Qt.UserRole, ('location', location))
 
-                    # Add streams under location
-                    for stream in location.findall('sc3:stream', self.ns):
+                    # Get all streams and sort them - Fixed line here
+                    streams = location.findall('sc3:stream', self.ns)
+                    sorted_streams = self.sort_channels(streams)  # Added self.
+
+                    # Add sorted streams under location
+                    for stream in sorted_streams:
                         stream_item = QTreeWidgetItem(location_item)
                         stream_item.setText(0, f"Stream: {stream.get('code', '')}")
                         stream_item.setData(0, Qt.UserRole, ('stream', stream))
@@ -1080,6 +1085,50 @@ F6: Collapse all
         """Helper method to get element text with namespace and default value"""
         elem = element.find(f'sc3:{tag}', self.ns)
         return elem.text if elem is not None else default
+
+    def sort_channels(self, channels):
+        """
+        Sort channels according to seismological convention:
+        1. First by band and instrument code (B, H, etc.)
+        2. Then by orientation (E/1, N/2, Z) or (1, 2, Z)
+        
+        Handles both cardinal (N,E,Z) and numerical (1,2,Z) orientation codes.
+        
+        Args:
+            channels: List of stream elements from XML
+        Returns:
+            Sorted list of stream elements
+        """
+        def get_sort_key(channel):
+            # Get channel code (e.g., 'BHZ', 'HH1', etc.)
+            code = channel.get('code', '')
+            if not code or len(code) < 3:
+                return ('', '', 999)  # Handle invalid codes
+                
+            # Split into components (e.g., 'B', 'H', 'Z' or 'B', 'H', '1')
+            band_code = code[0]  # B, H, etc.
+            instrument_code = code[1]  # H, N, etc.
+            orientation = code[2]  # Z, N, E, 1, 2
+            
+            # Custom orientation order:
+            # E/1 should come first
+            # N/2 should come second
+            # Z should come last
+            # Any other characters come after Z
+            orientation_order = {
+                'E': 0, '1': 0,  # E and 1 are equivalent
+                'N': 1, '2': 1,  # N and 2 are equivalent
+                'Z': 2,          # Z always comes last
+            }
+            orientation_value = orientation_order.get(orientation, 3)
+            
+            # For debugging
+            # print(f"Code: {code} -> Band: {band_code}, Inst: {instrument_code}, " \
+            #       f"Orient: {orientation} -> {orientation_value}")
+            
+            return (band_code, instrument_code, orientation_value)
+        
+        return sorted(channels, key=get_sort_key)
 
     def _update_element_text(self, element, tag, value, old_value=None):
         """Helper method to update element text with namespace and change tracking"""
