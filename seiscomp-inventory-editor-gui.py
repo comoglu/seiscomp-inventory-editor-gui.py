@@ -49,14 +49,21 @@ class TreeWidgetWithKeyboardNav(QTreeWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFocusPolicy(Qt.StrongFocus)
+        # Connect currentItemChanged signal to handle selection
+        self.currentItemChanged.connect(self._handleCurrentItemChanged)
         
+    def _handleCurrentItemChanged(self, current, previous):
+        """Handle item selection when current item changes"""
+        if current:
+            self.itemClicked.emit(current, 0)
+            
     def keyPressEvent(self, event):
         """Handle keyboard navigation events"""
         key = event.key()
         current_item = self.currentItem()
         
         if key == Qt.Key_Return or key == Qt.Key_Enter:
-            # Emit itemClicked signal to trigger the same action as mouse click
+            # Additional action for enter key if needed
             if current_item:
                 self.itemClicked.emit(current_item, 0)
         elif key == Qt.Key_Right:
@@ -87,9 +94,14 @@ class TreeWidgetWithKeyboardNav(QTreeWidget):
                 while last_item.isExpanded() and last_item.childCount() > 0:
                     last_item = last_item.child(last_item.childCount() - 1)
                 self.setCurrentItem(last_item)
-        else:
-            # Handle default navigation (up/down arrows)
+        elif key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown):
+            # Handle vertical navigation
             super().keyPressEvent(event)
+            # No need to emit itemClicked here as currentItemChanged will handle it
+        else:
+            # Handle all other keys
+            super().keyPressEvent(event)
+
 
 class SeisCompInventoryEditor(QMainWindow):
     def __init__(self):
