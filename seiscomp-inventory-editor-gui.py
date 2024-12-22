@@ -6,9 +6,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QHBoxLayout, QTreeWidget, QTreeWidgetItem,QTreeWidgetItemIterator, 
                            QLabel, QPushButton, QFileDialog, QMessageBox, QLineEdit,
                            QFormLayout, QGroupBox, QTabWidget, QStyle, QStatusBar, 
-                           QFrame, QSplitter, QMenu, QAction)
+                           QFrame, QSplitter, QMenu, QAction, QShortcut)
+from PyQt5.QtGui import QIcon, QPalette, QColor, QKeySequence  # Add QKeySequence here
 from PyQt5.QtCore import Qt, QSettings, QTimer
-from PyQt5.QtGui import QIcon, QPalette, QColor
 from xml.etree import ElementTree as ET
 from pathlib import Path
 import copy
@@ -44,6 +44,53 @@ class ValidationLineEdit(QLineEdit):
         if self.parent() and hasattr(self.parent(), 'handle_editing_finished'):
             self.parent().handle_editing_finished()
 
+class TreeWidgetWithKeyboardNav(QTreeWidget):
+    """Extended QTreeWidget with enhanced keyboard navigation"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+        
+    def keyPressEvent(self, event):
+        """Handle keyboard navigation events"""
+        key = event.key()
+        current_item = self.currentItem()
+        
+        if key == Qt.Key_Return or key == Qt.Key_Enter:
+            # Emit itemClicked signal to trigger the same action as mouse click
+            if current_item:
+                self.itemClicked.emit(current_item, 0)
+        elif key == Qt.Key_Right:
+            if current_item and not current_item.isExpanded():
+                current_item.setExpanded(True)
+            else:
+                # Move to first child if expanded
+                if current_item and current_item.childCount() > 0:
+                    self.setCurrentItem(current_item.child(0))
+        elif key == Qt.Key_Left:
+            if current_item:
+                if current_item.isExpanded():
+                    current_item.setExpanded(False)
+                else:
+                    # Move to parent
+                    parent = current_item.parent()
+                    if parent:
+                        self.setCurrentItem(parent)
+        elif key == Qt.Key_Home:
+            # Move to first item
+            first_item = self.topLevelItem(0)
+            if first_item:
+                self.setCurrentItem(first_item)
+        elif key == Qt.Key_End:
+            # Move to last visible item
+            last_item = self.topLevelItem(self.topLevelItemCount() - 1)
+            if last_item:
+                while last_item.isExpanded() and last_item.childCount() > 0:
+                    last_item = last_item.child(last_item.childCount() - 1)
+                self.setCurrentItem(last_item)
+        else:
+            # Handle default navigation (up/down arrows)
+            super().keyPressEvent(event)
+
 class SeisCompInventoryEditor(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -53,15 +100,59 @@ class SeisCompInventoryEditor(QMainWindow):
         self.root = None
         self.settings = QSettings('SeisCompEditor', 'InventoryEditor')
         self.unsaved_changes = False
-        
+        self.initUI()
+        self.loadSettings()
+        self.setupKeyboardNavigation()
+
         # Initialize autosave timer
         self.autosave_timer = QTimer()
         self.autosave_timer.setSingleShot(True)
         self.autosave_timer.timeout.connect(self.perform_autosave)
-        
-        self.initUI()
-        self.loadSettings()
 
+    def setupKeyboardNavigation(self):
+        """Setup keyboard shortcuts and navigation"""
+        # Add keyboard shortcuts for common actions
+        shortcuts = {
+            'Ctrl+O': self.load_xml,
+            'Ctrl+S': self.save_xml,
+            'Ctrl+Q': self.close,
+            'F5': self.tree_widget.expandAll,
+            'F6': self.tree_widget.collapseAll,
+            'Ctrl+F': lambda: self.statusBar.showMessage('Search functionality coming soon...', 2000)
+        }
+        
+        for key, action in shortcuts.items():
+            # Use QKeySequence instead of QKeySequenceEdit
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(action)
+        
+        # Enable tab navigation between form fields
+        for tab in [self.network_tab, self.station_tab, self.location_tab, self.sensor_tab, self.datalogger_tab, self.stream_tab]:
+            self.setupTabOrder(tab)
+    
+    def setupTabOrder(self, tab):
+        """Setup tab order for form fields within a tab"""
+        if not tab.layout():
+            return
+            
+        widgets = []
+        layout = tab.layout()
+        
+        # Check if it's a QFormLayout
+        if isinstance(layout, QFormLayout):
+            for i in range(layout.rowCount()):
+                field = layout.itemAt(i, QFormLayout.FieldRole)
+                if field and field.widget():
+                    widgets.append(field.widget())
+        
+        # Set tab order
+        for i in range(len(widgets) - 1):
+            self.setTabOrder(widgets[i], widgets[i + 1])
+        
+        # Connect return/enter key to move to next field
+        for widget in widgets:
+            if isinstance(widget, QLineEdit):
+                widget.returnPressed.connect(lambda w=widget: self.focusNextChild())
 
     def perform_autosave(self):
         """Perform the actual autosave"""
@@ -137,7 +228,7 @@ class SeisCompInventoryEditor(QMainWindow):
         left_layout.addWidget(file_controls)
 
         # Add tree widget with styling
-        self.tree_widget = QTreeWidget()
+        self.tree_widget = TreeWidgetWithKeyboardNav()
         self.tree_widget.setHeaderLabel('Inventory Structure')
         self.tree_widget.setStyleSheet("""
             QTreeWidget {
@@ -152,7 +243,12 @@ class SeisCompInventoryEditor(QMainWindow):
                 background-color: #e6f3ff;
                 color: black;
             }
+            QTreeWidget::item:focus {
+                border: 1px solid #66afe9;
+                background-color: #e6f3ff;
+            }
         """)
+
         left_layout.addWidget(self.tree_widget)
         
         # Create right panel for editing
@@ -180,19 +276,25 @@ class SeisCompInventoryEditor(QMainWindow):
         """)
         
         # Create tabs
+        self.network_tab = QWidget()
         self.station_tab = QWidget()
+        self.location_tab = QWidget()
         self.sensor_tab = QWidget()
         self.datalogger_tab = QWidget()
         self.stream_tab = QWidget()
         
         # Setup tabs
+        self.setup_network_tab()
         self.setup_station_tab()
+        self.setup_location_tab()
         self.setup_sensor_tab()
         self.setup_datalogger_tab()
         self.setup_stream_tab()
         
         # Add tabs to widget
+        self.tab_widget.addTab(self.network_tab, "Network")
         self.tab_widget.addTab(self.station_tab, "Station")
+        self.tab_widget.addTab(self.location_tab, "Location")
         self.tab_widget.addTab(self.sensor_tab, "Sensor")
         self.tab_widget.addTab(self.datalogger_tab, "Datalogger")
         self.tab_widget.addTab(self.stream_tab, "Stream")
@@ -262,6 +364,95 @@ class SeisCompInventoryEditor(QMainWindow):
                     if len(path_parts) > 1:
                         expand_path(root_item, path_parts[1:])
 
+    def setup_network_tab(self):
+        """Setup the network information tab"""
+        layout = QFormLayout(self.network_tab)
+        
+        network_group = QGroupBox("Network Information")
+        network_layout = QFormLayout()
+        
+        # Create validated input fields
+        self.network_code = ValidationLineEdit(required=True)
+        self.network_start = ValidationLineEdit()
+        self.network_end = ValidationLineEdit()
+        self.network_description = ValidationLineEdit()
+        self.network_institutions = ValidationLineEdit()
+        self.network_region = ValidationLineEdit()
+        self.network_type = ValidationLineEdit()
+        self.network_netClass = ValidationLineEdit()
+        self.network_archive = ValidationLineEdit()
+        self.network_restricted = ValidationLineEdit()
+        self.network_shared = ValidationLineEdit()
+        
+        # Add fields to layout
+        network_layout.addRow("Code:", self.network_code)
+        network_layout.addRow("Start Time:", self.network_start)
+        network_layout.addRow("End Time:", self.network_end)
+        network_layout.addRow("Description:", self.network_description)
+        network_layout.addRow("Institutions:", self.network_institutions)
+        network_layout.addRow("Region:", self.network_region)
+        network_layout.addRow("Type:", self.network_type)
+        network_layout.addRow("Network Class:", self.network_netClass)
+        network_layout.addRow("Archive:", self.network_archive)
+        network_layout.addRow("Restricted:", self.network_restricted)
+        network_layout.addRow("Shared:", self.network_shared)
+        
+        network_group.setLayout(network_layout)
+        layout.addWidget(network_group)
+        
+        # Add update button with styling
+        self.update_network_button = QPushButton("Update Network")
+        self.update_network_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
+        self.update_network_button.clicked.connect(self.update_network)
+        layout.addWidget(self.update_network_button)
+
+    def update_network(self):
+        """Update the network information in the XML"""
+        if hasattr(self, 'current_element'):
+            try:
+                # Save current expanded state
+                expanded_state = self.save_expanded_state()
+                
+                # Update basic attributes
+                if self.network_code.text():
+                    self.current_element.set('code', self.network_code.text())
+                
+                # Update other fields
+                self._update_element_text(self.current_element, 'start', self.network_start.text())
+                self._update_element_text(self.current_element, 'end', self.network_end.text())
+                self._update_element_text(self.current_element, 'description', self.network_description.text())
+                self._update_element_text(self.current_element, 'institutions', self.network_institutions.text())
+                self._update_element_text(self.current_element, 'region', self.network_region.text())
+                self._update_element_text(self.current_element, 'type', self.network_type.text())
+                self._update_element_text(self.current_element, 'netClass', self.network_netClass.text())
+                self._update_element_text(self.current_element, 'archive', self.network_archive.text())
+                self._update_element_text(self.current_element, 'restricted', self.network_restricted.text())
+                self._update_element_text(self.current_element, 'shared', self.network_shared.text())
+                
+                # Update tree and restore expanded state
+                self.populate_tree()
+                self.restore_expanded_state(expanded_state)
+                
+                self.unsaved_changes = True
+                self.statusBar.showMessage("Network updated successfully", 5000)
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to update network: {str(e)}")
+
     def setup_station_tab(self):
         layout = QFormLayout(self.station_tab)
         
@@ -311,6 +502,112 @@ class SeisCompInventoryEditor(QMainWindow):
         """)
         self.update_station_button.clicked.connect(self.update_station)
         layout.addWidget(self.update_station_button)
+
+    def setup_location_tab(self):
+        """Setup the sensor location information tab"""
+        layout = QFormLayout(self.location_tab)
+        
+        location_group = QGroupBox("Sensor Location Information")
+        location_layout = QFormLayout()
+        
+        # Create validated input fields
+        self.location_code = ValidationLineEdit(required=True)
+        self.location_start = ValidationLineEdit()
+        self.location_end = ValidationLineEdit()
+        self.location_lat = ValidationLineEdit(
+            validator=lambda x: re.match(r'^-?\d*\.?\d*$', x) and -90 <= float(x) <= 90 if x else True
+        )
+        self.location_lon = ValidationLineEdit(
+            validator=lambda x: re.match(r'^-?\d*\.?\d*$', x) and -180 <= float(x) <= 180 if x else True
+        )
+        self.location_elevation = ValidationLineEdit(
+            validator=lambda x: re.match(r'^-?\d*\.?\d*$', x) if x else True
+        )
+        self.location_country = ValidationLineEdit()
+        self.location_description = ValidationLineEdit()
+        self.location_affiliation = ValidationLineEdit()
+        
+        # Add fields to layout with tooltips
+        location_layout.addRow("Code:", self.location_code)
+        self.location_code.setToolTip("Location code (required)")
+        
+        location_layout.addRow("Start Time:", self.location_start)
+        self.location_start.setToolTip("Start time in ISO format (YYYY-MM-DD HH:MM:SS)")
+        
+        location_layout.addRow("End Time:", self.location_end)
+        self.location_end.setToolTip("End time in ISO format (YYYY-MM-DD HH:MM:SS)")
+        
+        location_layout.addRow("Latitude (°):", self.location_lat)
+        self.location_lat.setToolTip("Latitude in decimal degrees (-90 to 90)")
+        
+        location_layout.addRow("Longitude (°):", self.location_lon)
+        self.location_lon.setToolTip("Longitude in decimal degrees (-180 to 180)")
+        
+        location_layout.addRow("Elevation (m):", self.location_elevation)
+        self.location_elevation.setToolTip("Elevation in meters above sea level")
+        
+        location_layout.addRow("Country:", self.location_country)
+        location_layout.addRow("Description:", self.location_description)
+        location_layout.addRow("Affiliation:", self.location_affiliation)
+        
+        location_group.setLayout(location_layout)
+        layout.addWidget(location_group)
+        
+        # Add update button with styling
+        self.update_location_button = QPushButton("Update Location")
+        self.update_location_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
+        self.update_location_button.clicked.connect(self.update_location)
+        layout.addWidget(self.update_location_button)
+
+    def update_location(self):
+        """Update the sensor location information in the XML"""
+        if hasattr(self, 'current_element'):
+            try:
+                # Save current expanded state
+                expanded_state = self.save_expanded_state()
+                
+                # Update basic attributes
+                if self.location_code.text():
+                    self.current_element.set('code', self.location_code.text())
+                
+                # Update other fields
+                fields_to_update = {
+                    'start': self.location_start.text(),
+                    'end': self.location_end.text(),
+                    'latitude': self.location_lat.text(),
+                    'longitude': self.location_lon.text(),
+                    'elevation': self.location_elevation.text(),
+                    'country': self.location_country.text(),
+                    'description': self.location_description.text(),
+                    'affiliation': self.location_affiliation.text()
+                }
+                
+                for field, value in fields_to_update.items():
+                    self._update_element_text(self.current_element, field, value)
+                
+                # Update tree and restore expanded state
+                self.populate_tree()
+                self.restore_expanded_state(expanded_state)
+                
+                self.unsaved_changes = True
+                self.statusBar.showMessage("Location updated successfully", 5000)
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to update location: {str(e)}")
 
     def setup_sensor_tab(self):
         layout = QFormLayout(self.sensor_tab)
@@ -496,7 +793,13 @@ class SeisCompInventoryEditor(QMainWindow):
         
         # Edit menu
         edit_menu = menubar.addMenu('Edit')
-        
+
+        # Add Help menu with keyboard shortcuts reference
+        help_menu = self.menuBar().addMenu('Help')
+        shortcuts_action = QAction('Keyboard Shortcuts', self)
+        shortcuts_action.triggered.connect(self.show_shortcuts_help)
+        help_menu.addAction(shortcuts_action)
+
         expand_all_action = QAction('Expand All', self)
         expand_all_action.triggered.connect(self.tree_widget.expandAll)
         edit_menu.addAction(expand_all_action)
@@ -504,6 +807,27 @@ class SeisCompInventoryEditor(QMainWindow):
         collapse_all_action = QAction('Collapse All', self)
         collapse_all_action.triggered.connect(self.tree_widget.collapseAll)
         edit_menu.addAction(collapse_all_action)
+
+    def show_shortcuts_help(self):
+        """Show a dialog with keyboard shortcuts reference"""
+        shortcuts_text = """
+Keyboard Shortcuts:
+------------------
+Navigation:
+↑/↓: Move between items
+←/→: Collapse/Expand items
+Enter: Select item
+Home: Go to first item
+End: Go to last item
+Tab: Move between fields
+
+Global:
+Ctrl+O: Open file
+Ctrl+S: Save file
+Ctrl+Q: Quit
+F5: Expand all
+F6: Collapse all
+"""
 
     def loadSettings(self):
         geometry = self.settings.value('geometry')
@@ -911,9 +1235,15 @@ class SeisCompInventoryEditor(QMainWindow):
         item_type, element = item.data(0, Qt.UserRole)
         self.current_element = element
         
-        if item_type == 'station':
+        if item_type == 'network':  # Add this block
+            self.tab_widget.setCurrentWidget(self.network_tab)
+            self.populate_network_fields(element)
+        elif item_type == 'station':
             self.tab_widget.setCurrentWidget(self.station_tab)
             self.populate_station_fields(element)
+        elif item_type == 'location':
+            self.tab_widget.setCurrentWidget(self.stream_tab)
+            self.populate_stream_fields(element)
         elif item_type == 'sensor':
             self.tab_widget.setCurrentWidget(self.sensor_tab)
             self.populate_sensor_fields(element)
@@ -924,6 +1254,27 @@ class SeisCompInventoryEditor(QMainWindow):
             self.tab_widget.setCurrentWidget(self.stream_tab)
             self.populate_stream_fields(element)
 
+    def populate_network_fields(self, network):
+        """Populate the network fields with data from the XML element"""
+        try:
+            # Basic attributes
+            self.network_code.setText(network.get('code', ''))
+            
+            # Element fields
+            self.network_start.setText(self._get_element_text(network, 'start'))
+            self.network_end.setText(self._get_element_text(network, 'end'))
+            self.network_description.setText(self._get_element_text(network, 'description'))
+            self.network_institutions.setText(self._get_element_text(network, 'institutions'))
+            self.network_region.setText(self._get_element_text(network, 'region'))
+            self.network_type.setText(self._get_element_text(network, 'type'))
+            self.network_netClass.setText(self._get_element_text(network, 'netClass'))
+            self.network_archive.setText(self._get_element_text(network, 'archive'))
+            self.network_restricted.setText(self._get_element_text(network, 'restricted'))
+            self.network_shared.setText(self._get_element_text(network, 'shared'))
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Warning", f"Error populating network fields: {str(e)}")
+
     def populate_station_fields(self, station):
         self.station_code.setText(station.get('code', ''))
         self.station_name.setText(station.get('name', ''))
@@ -931,6 +1282,25 @@ class SeisCompInventoryEditor(QMainWindow):
         self.station_lat.setText(self._get_element_text(station, 'latitude'))
         self.station_lon.setText(self._get_element_text(station, 'longitude'))
         self.station_elevation.setText(self._get_element_text(station, 'elevation'))
+
+    def populate_location_fields(self, location):
+        """Populate the location fields with data from the XML element"""
+        try:
+            # Basic attributes
+            self.location_code.setText(location.get('code', ''))
+            
+            # Element fields
+            self.location_start.setText(self._get_element_text(location, 'start'))
+            self.location_end.setText(self._get_element_text(location, 'end'))
+            self.location_lat.setText(self._get_element_text(location, 'latitude'))
+            self.location_lon.setText(self._get_element_text(location, 'longitude'))
+            self.location_elevation.setText(self._get_element_text(location, 'elevation'))
+            self.location_country.setText(self._get_element_text(location, 'country'))
+            self.location_description.setText(self._get_element_text(location, 'description'))
+            self.location_affiliation.setText(self._get_element_text(location, 'affiliation'))
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Warning", f"Error populating location fields: {str(e)}")
 
     def populate_sensor_fields(self, sensor):
         self.sensor_name.setText(sensor.get('name', ''))
